@@ -2,9 +2,10 @@ import os
 import shutil
 from datetime import datetime
 from zoneinfo import ZoneInfo
-import os, re
+import re
 from typing import List, Tuple
 import csv
+from tqdm import tqdm
 
 def create_gallery(folder, output="gallery.html"):
     # Valid image extensions
@@ -350,7 +351,7 @@ def file_md5(filepath, chunk_size=8192):
     return md5.hexdigest()
 
 
-def revert_original_filenames(raw_dir, renamed_dir, log_csv="restore_log.csv"):
+def revert_original_filenames_v1(raw_dir, renamed_dir, log_csv="restore_log.csv"):
     """
     Restore original filenames in renamed_dir using MD5 hashes
     from files in raw_dir, and log the changes to a CSV file.
@@ -399,3 +400,61 @@ def revert_original_filenames(raw_dir, renamed_dir, log_csv="restore_log.csv"):
                 else:
                     print(f"⚠️ No match found for {fname} (hash={file_hash})")
                     writer.writerow([file_hash, fname, "NO_MATCH"])
+
+def revert_original_filenames(raw_dir, renamed_dir, log_csv="restore_log.csv"):
+    """
+    Restore original filenames in renamed_dir using MD5 hashes
+    from files in raw_dir, and log the changes to a CSV file.
+    
+    Args:
+        raw_dir (str): Directory containing original files.
+        renamed_dir (str): Directory containing renamed files to be restored.
+        log_csv (str): Path to the CSV log file (default: restore_log.csv).
+    """
+    # 1) Build a map of md5 -> original filename
+    md5_to_name = {}
+    raw_files = []
+    for root, _, files in os.walk(raw_dir):
+        for fname in files:
+            raw_files.append(os.path.join(root, fname))
+
+    for path in tqdm(raw_files, desc="Hashing raw files"):
+        file_hash = file_md5(path)
+        md5_to_name[file_hash] = os.path.basename(path)
+
+    # Collect renamed_dir files
+    renamed_files = []
+    for root, _, files in os.walk(renamed_dir):
+        for fname in files:
+            renamed_files.append(os.path.join(root, fname))
+
+    # Open CSV for logging
+    with open(log_csv, mode="w", newline="", encoding="utf-8") as csvfile:
+        writer = csv.writer(csvfile)
+        writer.writerow(["md5", "old_filename", "new_filename"])
+
+        # 2) For each file in renamed_dir, match and rename
+        for path in tqdm(renamed_files, desc="Restoring filenames"):
+            fname = os.path.basename(path)
+            file_hash = file_md5(path)
+
+            if file_hash in md5_to_name:
+                original_name = md5_to_name[file_hash]
+                new_path = os.path.join(os.path.dirname(path), original_name)
+
+                if path != new_path:  # Avoid unnecessary rename
+                    # Handle filename collisions by appending suffix
+                    counter = 1
+                    base, ext = os.path.splitext(original_name)
+                    while os.path.exists(new_path):
+                        new_path = os.path.join(os.path.dirname(path), f"{base}_{counter}{ext}")
+                        counter += 1
+
+                    print(f"Renaming: {fname} -> {os.path.basename(new_path)}")
+                    shutil.move(path, new_path)
+
+                    # Log the change
+                    writer.writerow([file_hash, fname, os.path.basename(new_path)])
+            else:
+                print(f"⚠️ No match found for {fname} (hash={file_hash})")
+                writer.writerow([file_hash, fname, "NO_MATCH"])
